@@ -1,0 +1,180 @@
+---
+title: "Prediction of Excercise Type"
+author: "Kevin Sookocheff"
+date: "March 18, 2015"
+output: html_document
+---
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In the analysis that follows attempts to predict the manner in which the exercise was performed.
+
+## Pre-Requisites
+
+The analysis requires a few R packages to be loaded. It is assumed that the required packages have already been installed on the user's system. We also set a random seed to 1234 for reproducibility of this report.
+
+
+```{r, message=FALSE}
+library('caret')
+library('randomForest')
+library('rpart')
+library('dplyr')
+library('ggplot2')
+library('rattle')
+library('doMC')
+
+registerDoMC(cores=4)
+set.seed(1234)
+```
+
+## Data Preparation
+
+The training data is available at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv while the test data is available at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv.
+
+```{r, cache=TRUE}
+download.file(url="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+              destfile='pml-training.csv',
+              method='curl')
+```
+
+We can load the data into local variables for further processing. Manual inspection has shown that a few NA values are present and must be accounted for. We also witness that some of the columns are entirely NA values. We can safely remove those columns from our analysis. We also remove any near zero variables and metadata such as username and timestamps, etc.
+
+
+```{r, cache=TRUE}
+trainingData <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""))
+trainingData <- trainingData[,colSums(is.na(trainingData)) == 0]
+# Remove near zero variables.
+trainingData <- trainingData[, -nearZeroVar(trainingData)]
+# Remove metadata
+trainingData <- select(trainingData, -(X:num_window))
+```
+
+The training data for this analysis records 19622 observations of 53 variables.
+
+```{r}
+dim(trainingData)
+```
+
+## Predicting `classe`
+
+Given this data, we want to predict the `classe` variable for the observations in the `inTest` set. The `classe` variable takes 5 values ranging from A to E.
+
+```{r}
+distinct(select(trainingData, classe))
+```
+
+We can plot a bar plot of the values to show the relevant frequency of each class of exercise. The plot shows that classe A is the most frequently occurring and classe D the least frequent. All values do seem likely to occur.
+
+```{r}
+ggplot(trainingData, aes(classe)) + geom_bar()
+```
+
+### Cross-Validation
+
+To actually perform the training we need to partition our data into a training set and a test set. This allows us to do cross-validation before applying our method to the testing set.
+
+
+```{r}
+sample <- createDataPartition(y=trainingData$classe, p=0.60, list=FALSE)
+inTraining <- trainingData[sample,]
+inTest <- trainingData[-sample,]
+```
+
+### Prediction using Decision Trees
+
+Our first prediction will use decision trees. We use the caret package as a clean interface to train our model using rpart.
+
+```{r, cache=TRUE, message=FALSE}
+rPartFit <- train(classe ~ ., data=inTraining, method="rpart")
+rPartPrediction <- predict(rPartFit, inTest)
+```
+
+We can plot the decision tree made through the rpart method to view the classification method.
+
+```{r}
+fancyRpartPlot(rPartFit$finalModel)
+```
+
+#### Out of sample error
+
+The confusion matrix shows that our accuracy level is around 50% and our out of sample error is therefore also around 50% (1 - accuracy level).
+
+```{r}
+confusionMatrix(rPartPrediction, inTest$classe)
+```
+
+We will try to do better using the random forest algorithm. 
+
+### Prediction using Random Forests
+
+Our second prediction will use the random forest algorithm. We again use the caret package.
+
+```{r, cache=TRUE, message=FALSE}
+rfFit <- train(classe ~ ., data=inTraining, method="rf", ntree=100, importance=TRUE)
+rfPrediction <- predict(rfFit, inTest)
+```
+
+#### Out of sample error
+
+The confusion matrix shows that our accuracy level is 0.99.
+
+```{r}
+confusionMatrix(rfPrediction, inTest$classe)
+```
+
+The out of sample error is therefore 1-0.99.
+
+```{r}
+1 - 0.99
+```
+
+The random forest algorithm clearly performs better than the decision tree algorithm. We will use this algorithm on our test set.
+
+### Predicting the Test Set
+
+We first pre-process the test data using the same method as the training data.
+
+```{r, cache=TRUE}
+download.file(url="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+              destfile='pml-testing.csv',
+              method='curl')
+```
+
+```{r, cache=TRUE}
+testingData <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!", ""))
+testingData <- testingData[,colSums(is.na(testingData)) == 0]
+# Remove near zero variables.
+testingData <- testingData[, -nearZeroVar(testingData)]
+# Remove metadata
+testingData <- select(testingData, -(X:num_window))
+```
+
+The testing data for this analysis holds 20 observations of 53 variables.
+
+```{r}
+dim(testingData)
+```
+
+We can predict the outcome for each of the testing observations using the random forest trained model.
+
+```{r}
+rfTestPrediction <- predict(rfFit, testingData)
+rfTestPrediction
+```
+
+## Final submission
+
+We use a script to generate submission files for the final submission.
+
+```{r}
+# Write files for submission
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+
+pml_write_files(rfTestPrediction)
+```
